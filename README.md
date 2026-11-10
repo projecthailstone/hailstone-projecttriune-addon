@@ -5,7 +5,8 @@ RoF2 client. It adds that server's client features (LootNScoot, the server's win
 stays off on every other server.
 
 This repository holds only the releases: each one is a signed `hailstone-addon.txt` and one package for each
-platform, the compiled plugin with its Lua windows. The plugin's source is not public.
+platform, the compiled plugin with its Lua windows. The plugin's source is not public. The only other file is the
+workflow that builds the macOS arm64 library on GitHub's Apple Silicon runner (`.github/workflows/macos.yml`).
 
 ## Installing
 

@@ -1,0 +1,81 @@
+# Builds the plugin's macOS arm64 library on GitHub's Apple Silicon runner. Its source is in a private repository,
+# whose Actions minutes are billed; this public one's are not, so the build runs here and clones that source with a
+# read-only deploy key (the TRIUNE_DEPLOY_KEY secret). Nothing of the source is kept: the artifact is the library and
+# its Lua windows, as published in every release, and the log shows only the compiler's error and warning lines.
+#
+# The source repository's tools/release.sh downloads the artifact of the run titled with the commit it releases:
+#   gh workflow run macos.yml -R projecthailstone/hailstone-projecttriune-addon -f commit=<full sha>
+name: macOS arm64
+run-name: macOS arm64 of ${{ inputs.commit }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: the plugin's full commit SHA (the private repository's)
+        required: true
+      client_ref:
+        description: hailstone-client branch, tag or commit whose sdk/ to build against
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      NAME: projecttriune
+    steps:
+      - name: Check the commit
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          echo "$COMMIT" | grep -qE '^[0-9a-f]{40}$' || { echo "commit must be a full SHA" >&2; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          repository: projecthailstone/hailstone-projecttriune
+          ref: ${{ inputs.commit }}
+          ssh-key: ${{ secrets.TRIUNE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: plugin
+      - uses: actions/checkout@v4
+        with:
+          repository: projecthailstone/hailstone-client
+          ref: ${{ inputs.client_ref }}
+          path: client
+          sparse-checkout: sdk
+          persist-credentials: false
+      - name: Install tools
+        run: brew install ninja
+      - name: Build
+        # 13.3 is the client's deployment target (its CMakeLists.txt), so the library loads wherever the client does.
+        # The compiler's full output quotes source lines: keep it off this public log.
+        run: |
+          cmake -S plugin -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DHAILSTONE_CLIENT_DIR="$PWD/client" \
+                -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 > configure.log 2>&1 ||
+            { echo "configure failed" >&2; exit 1; }
+          status=0
+          cmake --build build > build.log 2>&1 || status=$?
+          grep -E ': (fatal error|error|warning):' build.log || true
+          echo "$(grep -cE ': warning:' build.log || true) warnings"
+          exit $status
+      - name: Strip and sign ad hoc
+        # Apple Silicon loads only signed code; strip leaves the linker's ad-hoc signature invalid, so sign again.
+        run: |
+          lib="build/$NAME/$NAME.dylib"
+          strip -x "$lib"
+          codesign --force --sign - "$lib"
+          codesign --verify --verbose "$lib"
+          file "$lib"
+          otool -L "$lib"
+          if otool -L "$lib" | tail -n +2 | grep -v -E '^\s*(/usr/lib/|/System/)'; then
+            echo "the library needs something outside the system" >&2; exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}-macos-arm64
+          path: build/${{ env.NAME }}
+          if-no-files-found: error
+          retention-days: 14
